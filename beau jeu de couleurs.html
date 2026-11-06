@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Hues maison</title>
+<style>
+:root{box-sizing:border-box;color-scheme:light dark;--panel:rgba(255,255,255,.9);--ink:#141414;--ink2:#fff;--line:rgba(0,0,0,.2);padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--panel:rgba(20,20,20,.9);--ink:#f2f2f2;--ink2:#111;--line:rgba(255,255,255,.25)}}
+:root[data-theme="dark"]{color-scheme:dark;--panel:rgba(20,20,20,.9);--ink:#f2f2f2;--ink2:#111;--line:rgba(255,255,255,.25)}
+:root[data-theme="light"]{color-scheme:light}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:#111;color:var(--ink);font:16px/1.4 system-ui,sans-serif;overflow:hidden;-webkit-user-select:none;user-select:none}
+#bg,#fx,#stage{position:fixed;inset:0;pointer-events:none}
+#bg{background:#3a3a3a}
+#stage{display:grid;place-items:center}
+#shape{width:min(46vmin,420px);aspect-ratio:1;background:rgba(0,0,0,.3) center/contain no-repeat;clip-path:circle(50%);will-change:transform}
+#fx{opacity:0}
+#bottom{position:fixed;left:0;right:0;bottom:0;padding:8px 8px calc(8px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:10px;pointer-events:none}
+#name{text-align:center;color:#fff;text-shadow:0 2px 0 rgba(0,0,0,.35),0 0 18px rgba(0,0,0,.35);font:800 clamp(26px,8vw,68px)/1.05 ui-monospace,Menlo,Consolas,monospace}
+#ui{pointer-events:auto;width:100%;max-width:720px;margin:0 auto;display:grid;gap:8px;padding:10px 12px;background:var(--panel);border:1px solid var(--line);border-radius:12px;-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+button,.btn{background:var(--ink);color:var(--ink2);border:0;border-radius:8px;padding:8px 12px;font:inherit;font-weight:600;cursor:pointer}
+label{display:flex;gap:6px;align-items:center}
+small{opacity:.8;font-size:12.5px}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><filter id="bl" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur id="gb" stdDeviation="0 0"/></filter></svg>
+<div id="bg"></div>
+<div id="stage"><div id="shape"></div></div>
+<div id="fx"></div>
+<div id="bottom">
+  <div id="name">Appuie sur « Démarrer »</div>
+  <div id="ui">
+    <div class="row">
+      <button id="go">Démarrer</button>
+      <label class="btn">Mes images<input id="img" type="file" accept="image/*" multiple hidden></label>
+      <button id="hide">Masquer</button>
+    </div>
+    <div class="row">
+      <label>BPM <output id="bv">128</output><input id="bpm" type="range" min="70" max="180" value="128"></label>
+      <label><input id="dr" type="checkbox" checked>Drums</label>
+    </div>
+    <small>Touche l’écran pour réafficher le panneau après « Masquer ». Attention : flashs lumineux rapides, à éviter en cas de photosensibilité.</small>
+  </div>
+</div>
+<script>
+const $=id=>document.getElementById(id),rnd=n=>Math.floor(Math.random()*n);
+// 48 couleurs : 12 familles × 4 tons
+const FAM=['Rouge','Orange','Jaune','Lime','Vert','Menthe','Cyan','Azur','Bleu','Violet','Magenta','Rose'];
+const TON=[['vif',75,52],['pastel',85,76],['profond',65,30],['néon',100,58]];
+const COL=[];TON.forEach(t=>FAM.forEach((f,i)=>COL.push({c:`hsl(${i*30},${t[1]}%,${t[2]}%)`,n:f+' · '+t[0]})));
+const SH=['circle(50%)','inset(0)','polygon(50% 0,100% 100%,0 100%)','polygon(50% 0,100% 50%,50% 100%,0 50%)','polygon(25% 0,75% 0,100% 50%,75% 100%,25% 100%,0 50%)','polygon(35% 0,65% 0,65% 35%,100% 35%,100% 65%,65% 65%,65% 100%,35% 100%,35% 65%,0 65%,0 35%,35% 35%)'];
+const RY='x.o.x.o.x.o.x.oi'; // x kick + flou vertical, o caisse claire + flou horizontal, i inversion, | noir, * flash
+const calm=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const bg=$('bg'),sh=$('shape'),stage=$('stage'),fx=$('fx'),nm=$('name'),gb=$('gb'),ui=$('ui');
+let ctx,nbuf,timer,playing=false,hid=false,step=0,next=0,q=[],bpm=128,cur=-1,bx=0,by=0,pop=0,fa=0,fc='#000',inv=0,imgs=[],last=0;
+
+// --- Audio ---
+function init(){
+  if(ctx)return;
+  ctx=new (window.AudioContext||window.webkitAudioContext)();
+  nbuf=ctx.createBuffer(1,ctx.sampleRate,ctx.sampleRate);
+  const d=nbuf.getChannelData(0);for(let i=0;i<d.length;i++)d[i]=Math.random()*2-1;
+}
+function noise(t,len,f,v){
+  const n=ctx.createBufferSource(),h=ctx.createBiquadFilter(),g=ctx.createGain();
+  n.buffer=nbuf;h.type='highpass';h.frequency.value=f;
+  g.gain.setValueAtTime(v,t);g.gain.exponentialRampToValueAtTime(.001,t+len);
+  n.connect(h);h.connect(g);g.connect(ctx.destination);n.start(t);n.stop(t+len);
+}
+function kick(t){
+  const o=ctx.createOscillator(),g=ctx.createGain();
+  o.frequency.setValueAtTime(160,t);o.frequency.exponentialRampToValueAtTime(42,t+.14);
+  g.gain.setValueAtTime(.9,t);g.gain.exponentialRampToValueAtTime(.001,t+.3);
+  o.connect(g);g.connect(ctx.destination);o.start(t);o.stop(t+.32);
+}
+function drum(c,t,s){
+  if(c==='x'||c==='i')kick(t);
+  else if(c==='o')noise(t,.16,1500,.5);
+  else if(s%2===0)noise(t,.04,7000,.12);
+}
+// Planificateur : une case = une double croche, lue légèrement à l’avance
+function sched(){
+  const r=RY,sd=15/bpm;
+  while(next<ctx.currentTime+.12){
+    const c=r[step%r.length];
+    q.push({t:next,c});
+    if($('dr').checked)drum(c,next,step);
+    next+=sd;step++;
+  }
+}
+function start(){
+  init();ctx.resume();
+  next=ctx.currentTime+.1;step=0;q.length=0;playing=true;
+  timer=setInterval(sched,25);$('go').textContent='Arrêter';
+}
+function stop(){
+  clearInterval(timer);playing=false;q.length=0;
+  $('go').textContent='Démarrer';
+}
+
+// --- Visuel ---
+function color(){
+  let n;do n=rnd(COL.length);while(n===cur);
+  cur=n;bg.style.background=COL[n].c;nm.textContent=COL[n].n;
+}
+function shape(){
+  if(imgs.length){sh.style.backgroundImage=`url("${imgs[rnd(imgs.length)]}")`;sh.style.backgroundColor='transparent';sh.style.clipPath='none'}
+  else{sh.style.backgroundImage='none';sh.style.backgroundColor='rgba(0,0,0,.3)';sh.style.clipPath=SH[rnd(SH.length)]}
+}
+function hit(c){
+  if('xoi'.includes(c)){color();shape();pop=1}
+  if(calm)return; // pas de flou/flash si « réduire les animations »
+  if(c==='x')by=24;
+  else if(c==='o')bx=24;
+  else if(c==='i')inv=1;
+  else if(c==='|'){fc='#000';fa=1}
+  else if(c==='*'){fc='#fff';fa=1}
+}
+function frame(now){
+  const dt=Math.min((now-last)/1000,.1);last=now;
+  if(ctx)while(q.length&&q[0].t<=ctx.currentTime)hit(q.shift().c);
+  const b=bpm/60,f=Math.pow(.02,dt*b);
+  bx*=f;by*=f;pop*=f;inv*=f;fa=Math.max(0,fa-dt*b*3);
+  sh.style.transform=`scale(${1+pop*.2})`;
+  const bl=bx+by>.5;
+  stage.style.filter=bl?'url(#bl)':'none';
+  if(bl)gb.setAttribute('stdDeviation',bx.toFixed(1)+' '+by.toFixed(1));
+  bg.style.filter=inv>.3?'invert(1)':'none';
+  fx.style.background=fc;fx.style.opacity=fa;
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+// --- Contrôles ---
+$('go').onclick=()=>playing?stop():start();
+$('bpm').oninput=e=>{bpm=+e.target.value;$('bv').textContent=bpm};
+$('img').onchange=e=>{imgs=[...e.target.files].map(f=>URL.createObjectURL(f))};
+const tog=h=>{hid=h;ui.style.display=h?'none':''};
+$('hide').onclick=()=>tog(true);
+addEventListener('pointerdown',()=>{if(hid)tog(false)});
+addEventListener('keydown',e=>{
+  if(e.target!==document.body)return;
+  if(e.code==='Space'){e.preventDefault();$('go').click()}
+  else if(e.key==='h')tog(!hid);
+});
+</script>
+</body>
+</html>
